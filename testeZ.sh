@@ -1,99 +1,108 @@
 #!/bin/bash
-SERVIDOR_IP="192.168.0.1"
-USER="pedro"
 
-echo "===== REPARO COMPLETO DO CLIENTE ====="
+# Script de Instalação e Configuração do Samba
+# Para compartilhar uma pasta em rede local
 
+echo "=========================================="
+echo "Instalação e Configuração do Samba"
+echo "=========================================="
 echo ""
-echo "== [1] Removendo PROXY do ambiente =="
-unset http_proxy https_proxy all_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY
-echo "✔ Proxy removido"
 
-echo ""
-echo "== [2] Instalando pacotes necessários =="
-sudo apt update
-sudo apt install -y mailutils netcat-openbsd dnsutils openssh-client
-echo "✔ Pacotes instalados"
-
-echo ""
-echo "== [3] Corrigindo DNS do cliente =="
-if ! grep -q "nameserver 1.1.1.1" /etc/resolv.conf; then
-    echo "❌ DNS incorreto — configurando..."
-    echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf >/dev/null
-else
-    echo "✔ DNS OK"
+# Verificar se está rodando como root
+if [ "$EUID" -ne 0 ]; then 
+    echo "Por favor, execute como root (use sudo)"
+    exit 1
 fi
 
-echo ""
-echo "== [4] Verificando rota para o servidor =="
-sudo ip route | grep -q "192.168.0.1"
+# 1. Atualizar repositórios e instalar o Samba
+echo "[1/7] Instalando o Samba..."
+apt update
+apt install samba -y
+
 if [ $? -ne 0 ]; then
-    echo "❌ Rota não existe — adicionando..."
-    sudo ip route add 192.168.0.0/24 dev enp0s8
-else
-    echo "✔ Rota OK"
+    echo "Erro ao instalar o Samba!"
+    exit 1
+fi
+
+echo "Samba instalado com sucesso!"
+echo ""
+
+# 2. Criar o diretório compartilhado
+echo "[2/7] Criando diretório compartilhado..."
+SHARED_DIR="/Compartilhado"
+mkdir -p "$SHARED_DIR"
+
+# 3. Definir permissões
+echo "[3/7] Configurando permissões..."
+chmod 755 "$SHARED_DIR"
+
+echo "Diretório $SHARED_DIR criado com sucesso!"
+echo ""
+
+# 4. Fazer backup do arquivo de configuração original
+echo "[4/7] Fazendo backup da configuração original..."
+cp /etc/samba/smb.conf /etc/samba/smb.conf.backup
+
+# 5. Configurar o arquivo smb.conf
+echo "[5/7] Configurando o Samba..."
+cat >> /etc/samba/smb.conf << EOF
+
+[Compartilhado]
+   path = $SHARED_DIR
+   browseable = yes
+   writable = yes
+   guest ok = yes
+   public = yes
+   create mask = 0644
+   directory mask = 0755
+EOF
+
+echo "Configuração adicionada ao smb.conf"
+echo ""
+
+# 6. Adicionar usuário Samba (opcional, mas recomendado)
+echo "[6/7] Configurando usuário para o Samba..."
+read -p "Deseja criar um usuário Samba? (s/n): " criar_usuario
+
+if [ "$criar_usuario" = "s" ] || [ "$criar_usuario" = "S" ]; then
+    read -p "Nome do usuário: " username
+    
+    # Criar usuário do sistema se não existir
+    if ! id "$username" &>/dev/null; then
+        useradd -M -s /sbin/nologin "$username"
+    fi
+    
+    # Adicionar senha do Samba
+    echo "Defina a senha para o usuário Samba $username:"
+    smbpasswd -a "$username"
 fi
 
 echo ""
-echo "== [5] Corrigindo /etc/hosts =="
-if ! grep -q "192.168.0.1 servidor" /etc/hosts; then
-    echo "192.168.0.1 servidor" | sudo tee -a /etc/hosts >/dev/null
-    echo "✔ /etc/hosts corrigido"
-else
-    echo "✔ /etc/hosts OK"
-fi
+
+# 7. Iniciar e habilitar os serviços
+echo "[7/7] Iniciando serviços do Samba..."
+systemctl start smbd
+systemctl start nmbd
+systemctl enable smbd
+systemctl enable nmbd
 
 echo ""
-echo "== [6] Testando conectividade com o servidor =="
-ping -c1 $SERVIDOR_IP &>/dev/null
-if [ $? -ne 0 ]; then
-    echo "❌ O cliente não consegue alcançar o servidor!"
-    echo "Verifique o DHCP, cabo virtual ou rede interna."
-else
-    echo "✔ Conectividade OK"
-fi
-
+echo "=========================================="
+echo "Instalação concluída com sucesso!"
+echo "=========================================="
 echo ""
-echo "== [7] Testando portas necessárias =="
-PORTAS=(25 587 143 993)
-for P in "${PORTAS[@]}"; do
-    echo -n "Porta $P... "
-    timeout 3 bash -c "</dev/tcp/$SERVIDOR_IP/$P" &>/dev/null
-    if [ $? -eq 0 ]; then echo "✔ ABERTA"; else echo "❌ FECHADA"; fi
-done
-
+echo "Informações importantes:"
+echo "- Diretório compartilhado: $SHARED_DIR"
+echo "- Nome do compartilhamento: Compartilhado"
 echo ""
-echo "== [8] Criando um email de teste via sendmail =="
-TESTE="/tmp/email_cliente_$(date +%s).txt"
-echo "Email de teste enviado do cliente em $(date)" > "$TESTE"
-
+echo "Para acessar de outro computador:"
+echo "- Windows: \\\\$(hostname -I | awk '{print $1}')\\Compartilhado"
+echo "- Linux: smb://$(hostname -I | awk '{print $1}')/Compartilhado"
 echo ""
-echo "== [9] Enviando e-mail para o servidor =="
-(
-echo "HELO cliente"
-echo "MAIL FROM:<cliente@rede.local>"
-echo "RCPT TO:<pedro@$SERVIDOR_IP>"
-echo "DATA"
-cat "$TESTE"
-echo "."
-echo "QUIT"
-) | nc $SERVIDOR_IP 25
-
-echo "✔ Email de teste enviado (ou tentativa enviada)"
-
+echo "Verificar status do serviço:"
+echo "  sudo systemctl status smbd"
 echo ""
-echo "== [10] Enviando log para o servidor =="
-scp "$TESTE" pedro@$SERVIDOR_IP:/tmp/ 2>/dev/null
-if [ $? -eq 0 ]; then
-    echo "✔ Log enviado para o servidor"
-else
-    echo "❌ Não foi possível enviar o log via SCP"
-    echo "Possíveis causas:"
-    echo "- Servidor sem SSH ativo"
-    echo "- Permissões erradas no usuário"
-    echo "- Firewall bloqueando"
-fi
-
+echo "Ver compartilhamentos ativos:"
+echo "  smbstatus"
 echo ""
-echo "===== REPARO DO CLIENTE FINALIZADO ====="
-echo "Agora execute:  sudo tail -f /var/log/mail.log  no servidor para acompanhar a entrega."
+echo "=========================================="
