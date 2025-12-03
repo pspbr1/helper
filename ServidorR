@@ -1,0 +1,361 @@
+#!/bin/bash
+
+# Script de Reset Completo - Servidor Ubuntu 24.04
+# Remove todos os serviços e configurações instaladas
+# Autor: Reset Automatizado
+# Data: 2025
+
+set -e
+
+# Cores para output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+# Função para log
+log() {
+    echo -e "${GREEN}[$(date +'%Y-%m-%d %H:%M:%S')]${NC} $1"
+}
+
+error() {
+    echo -e "${RED}[ERRO]${NC} $1"
+    exit 1
+}
+
+warning() {
+    echo -e "${YELLOW}[AVISO]${NC} $1"
+}
+
+info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+# Verificar se é root
+if [[ $EUID -ne 0 ]]; then
+   error "Este script precisa ser executado como root (sudo)"
+fi
+
+# Confirmação de segurança
+echo ""
+echo "=========================================="
+echo "⚠️  AVISO: RESET COMPLETO DO SERVIDOR"
+echo "=========================================="
+echo ""
+echo "Este script irá:"
+echo "  • Remover todos os serviços instalados"
+echo "  • Deletar todas as configurações"
+echo "  • Remover usuários criados"
+echo "  • Resetar configurações de rede"
+echo "  • Limpar regras de firewall"
+echo ""
+echo -e "${RED}ESTA AÇÃO NÃO PODE SER DESFEITA!${NC}"
+echo ""
+read -p "Tem certeza que deseja continuar? (digite 'SIM' para confirmar): " confirmacao
+
+if [ "$confirmacao" != "SIM" ]; then
+    echo "Reset cancelado."
+    exit 0
+fi
+
+echo ""
+log "Iniciando reset do servidor..."
+
+# ============================================
+# 1. PARAR TODOS OS SERVIÇOS
+# ============================================
+
+log "Parando todos os serviços..."
+
+systemctl stop apache2 2>/dev/null || true
+systemctl stop mysql 2>/dev/null || true
+systemctl stop postfix 2>/dev/null || true
+systemctl stop dovecot 2>/dev/null || true
+systemctl stop squid 2>/dev/null || true
+systemctl stop smbd 2>/dev/null || true
+systemctl stop nmbd 2>/dev/null || true
+systemctl stop isc-dhcp-server 2>/dev/null || true
+
+log "Serviços parados"
+
+# ============================================
+# 2. REMOVER PACOTES
+# ============================================
+
+log "Removendo pacotes instalados..."
+
+export DEBIAN_FRONTEND=noninteractive
+
+# Apache e PHP
+apt-get remove --purge -y apache2 apache2-utils apache2-bin apache2-data 2>/dev/null || true
+apt-get remove --purge -y php* libapache2-mod-php* 2>/dev/null || true
+
+# MySQL e phpMyAdmin
+apt-get remove --purge -y mysql-server mysql-client mysql-common 2>/dev/null || true
+apt-get remove --purge -y phpmyadmin 2>/dev/null || true
+
+# Email (Postfix e Dovecot)
+apt-get remove --purge -y postfix postfix-* 2>/dev/null || true
+apt-get remove --purge -y dovecot-core dovecot-imapd dovecot-pop3d 2>/dev/null || true
+apt-get remove --purge -y mailutils 2>/dev/null || true
+
+# Squid Proxy
+apt-get remove --purge -y squid squid-common 2>/dev/null || true
+
+# Samba
+apt-get remove --purge -y samba samba-common samba-common-bin smbclient 2>/dev/null || true
+
+# DHCP Server
+apt-get remove --purge -y isc-dhcp-server 2>/dev/null || true
+
+# Limpar dependências
+apt-get autoremove -y 2>/dev/null || true
+apt-get autoclean -y 2>/dev/null || true
+
+log "Pacotes removidos"
+
+# ============================================
+# 3. REMOVER DIRETÓRIOS E ARQUIVOS
+# ============================================
+
+log "Removendo diretórios e arquivos de configuração..."
+
+# Apache
+rm -rf /etc/apache2
+rm -rf /var/www/html/*
+rm -rf /var/log/apache2
+
+# MySQL
+rm -rf /etc/mysql
+rm -rf /var/lib/mysql
+rm -rf /var/log/mysql
+
+# Postfix
+rm -rf /etc/postfix
+rm -rf /var/spool/postfix
+rm -rf /var/mail/*
+rm -rf /var/log/mail.*
+
+# Dovecot
+rm -rf /etc/dovecot
+rm -rf /var/log/dovecot*
+
+# Squid
+rm -rf /etc/squid
+rm -rf /var/spool/squid
+rm -rf /var/log/squid
+
+# Samba
+rm -rf /etc/samba
+rm -rf /srv/samba
+rm -rf /var/lib/samba
+rm -rf /var/log/samba
+
+# DHCP
+rm -rf /etc/dhcp
+rm -rf /var/lib/dhcp
+
+# PHP
+rm -rf /etc/php
+
+# Arquivos de configuração do servidor
+rm -f /root/servidor_config.txt
+rm -f /root/servidor_info.txt
+
+log "Diretórios removidos"
+
+# ============================================
+# 4. REMOVER USUÁRIOS CRIADOS
+# ============================================
+
+log "Removendo usuários criados..."
+
+# Remover usuário aluno
+if id "aluno" &>/dev/null; then
+    userdel -r aluno 2>/dev/null || userdel aluno 2>/dev/null || true
+    log "Usuário 'aluno' removido"
+fi
+
+# Remover usuário usuario1 se existir
+if id "usuario1" &>/dev/null; then
+    userdel -r usuario1 2>/dev/null || userdel usuario1 2>/dev/null || true
+    log "Usuário 'usuario1' removido"
+fi
+
+# Remover grupo sambausers se existir
+groupdel sambausers 2>/dev/null || true
+
+log "Usuários removidos"
+
+# ============================================
+# 5. RESETAR CONFIGURAÇÃO DE REDE
+# ============================================
+
+log "Resetando configuração de rede..."
+
+# Limpar iptables
+iptables -F
+iptables -X
+iptables -t nat -F
+iptables -t nat -X
+iptables -t mangle -F
+iptables -t mangle -X
+iptables -P INPUT ACCEPT
+iptables -P FORWARD ACCEPT
+iptables -P OUTPUT ACCEPT
+
+# Salvar regras limpas
+netfilter-persistent save 2>/dev/null || true
+
+# Desabilitar IP Forward
+sed -i 's/net.ipv4.ip_forward=1/#net.ipv4.ip_forward=1/' /etc/sysctl.conf
+sysctl -w net.ipv4.ip_forward=0
+
+# Remover configurações de netplan personalizadas
+rm -f /etc/netplan/00-installer-config.yaml
+rm -f /etc/netplan/01-netcfg.yaml
+rm -f /etc/netplan/01-client-config.yaml
+
+# Restaurar netplan padrão se houver backup
+if [ -d "/etc/netplan.backup."* ]; then
+    LATEST_BACKUP=$(ls -dt /etc/netplan.backup.* | head -1)
+    if [ -n "$LATEST_BACKUP" ]; then
+        warning "Restaurando backup do netplan: $LATEST_BACKUP"
+        cp -r "$LATEST_BACKUP"/* /etc/netplan/ 2>/dev/null || true
+    fi
+fi
+
+# Se não houver backup, criar configuração DHCP básica
+if [ ! -f /etc/netplan/*.yaml ] 2>/dev/null; then
+    cat > /etc/netplan/00-installer-config.yaml <<EOF
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    enp0s3:
+      dhcp4: true
+EOF
+    chmod 600 /etc/netplan/00-installer-config.yaml
+fi
+
+# Aplicar netplan
+netplan apply 2>/dev/null || warning "Erro ao aplicar netplan - configure manualmente"
+
+log "Configuração de rede resetada"
+
+# ============================================
+# 6. RESETAR FIREWALL (UFW)
+# ============================================
+
+log "Resetando firewall..."
+
+ufw --force reset 2>/dev/null || true
+ufw --force disable 2>/dev/null || true
+
+log "Firewall resetado"
+
+# ============================================
+# 7. LIMPAR CONFIGURAÇÕES DO SISTEMA
+# ============================================
+
+log "Limpando configurações do sistema..."
+
+# Limpar /etc/hosts de entradas customizadas
+sed -i '/empresa.local/d' /etc/hosts
+sed -i '/servidor.empresa.local/d' /etc/hosts
+
+# Resetar hostname para ubuntu (ou padrão)
+hostnamectl set-hostname ubuntu
+
+# Limpar /etc/environment de configurações de proxy
+sed -i '/http_proxy/d' /etc/environment
+sed -i '/https_proxy/d' /etc/environment
+sed -i '/ftp_proxy/d' /etc/environment
+sed -i '/HTTP_PROXY/d' /etc/environment
+sed -i '/HTTPS_PROXY/d' /etc/environment
+sed -i '/FTP_PROXY/d' /etc/environment
+sed -i '/no_proxy/d' /etc/environment
+sed -i '/NO_PROXY/d' /etc/environment
+
+# Limpar configurações de proxy do APT
+rm -f /etc/apt/apt.conf.d/95proxies
+
+log "Configurações do sistema limpas"
+
+# ============================================
+# 8. LIMPAR LOGS
+# ============================================
+
+log "Limpando logs..."
+
+# Limpar logs relacionados aos serviços
+rm -f /var/log/apache2/*
+rm -f /var/log/mysql/*
+rm -f /var/log/mail.*
+rm -f /var/log/squid/*
+rm -f /var/log/samba/*
+
+# Limpar journal de serviços removidos
+journalctl --vacuum-time=1s 2>/dev/null || true
+
+log "Logs limpos"
+
+# ============================================
+# 9. ATUALIZAR SISTEMA
+# ============================================
+
+log "Atualizando sistema..."
+
+apt-get update
+apt-get upgrade -y
+
+log "Sistema atualizado"
+
+# ============================================
+# 10. INFORMAÇÕES FINAIS
+# ============================================
+
+log ""
+log "=========================================="
+log "✅ RESET DO SERVIDOR CONCLUÍDO!"
+log "=========================================="
+log ""
+log "📋 AÇÕES REALIZADAS:"
+log "  ✓ Todos os serviços removidos"
+log "  ✓ Configurações deletadas"
+log "  ✓ Usuários removidos (aluno, usuario1)"
+log "  ✓ Rede resetada para DHCP"
+log "  ✓ Firewall desabilitado"
+log "  ✓ NAT/Roteamento desabilitado"
+log "  ✓ Logs limpos"
+log ""
+log "⚙️  ESTADO ATUAL:"
+log "  • Hostname: $(hostname)"
+log "  • Rede: DHCP (configuração padrão)"
+log "  • Serviços: Apenas sistema base"
+log ""
+log "📝 PRÓXIMOS PASSOS:"
+log "  1. O servidor está em estado limpo"
+log "  2. Você pode executar o script de instalação novamente"
+log "  3. Ou configurar manualmente conforme necessário"
+log ""
+log "⚠️  RECOMENDAÇÃO:"
+log "  • Reinicie o servidor para garantir que todas as mudanças sejam aplicadas"
+log "  • Comando: sudo reboot"
+log ""
+log "=========================================="
+
+info ""
+info "🔍 Verificando serviços restantes..."
+SERVICES_RUNNING=$(systemctl list-units --type=service --state=running | grep -E 'apache|mysql|postfix|dovecot|squid|samba|dhcp' | wc -l)
+
+if [ "$SERVICES_RUNNING" -eq 0 ]; then
+    log "✓ Nenhum serviço relacionado em execução"
+else
+    warning "⚠ Alguns serviços ainda podem estar em execução. Verifique com: systemctl list-units"
+fi
+
+log ""
+log "Script de reset finalizado!"
+log "Reinicie o servidor: sudo reboot"
